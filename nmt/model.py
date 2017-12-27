@@ -83,7 +83,6 @@ class BaseModel(object):
     tf.get_variable_scope().set_initializer(initializer)
 
     # Embeddings
-    # TODO(ebrevdo): Only do this if the mode is TRAIN?
     self.init_embeddings(hparams, scope)
     self.batch_size = tf.size(self.iterator.source_sequence_length)
 
@@ -155,7 +154,8 @@ class BaseModel(object):
       self.infer_summary = self._get_infer_summary(hparams)
 
     # Saver
-    self.saver = tf.train.Saver(tf.global_variables())
+    self.saver = tf.train.Saver(
+        tf.global_variables(), max_to_keep=hparams.num_keep_ckpts)
 
     # Print trainable variables
     utils.print_out("# Trainable variables")
@@ -190,26 +190,27 @@ class BaseModel(object):
 
   def _get_learning_rate_decay(self, hparams):
     """Get learning rate decay."""
-    if hparams.learning_rate_decay_scheme in ["luong", "luong10"]:
-      start_factor = 2
-      start_decay_step = int(hparams.num_train_steps / start_factor)
+    if hparams.decay_scheme == "luong10":
+      start_decay_step = int(hparams.num_train_steps / 2)
+      remain_steps = hparams.num_train_steps - start_decay_step
+      decay_steps = int(remain_steps / 10)  # decay 10 times
       decay_factor = 0.5
-
-      # decay 5 times
-      if hparams.learning_rate_decay_scheme == "luong":
-        decay_steps = int(hparams.num_train_steps / (5 * start_factor))
-      # decay 10 times
-      elif hparams.learning_rate_decay_scheme == "luong10":
-        decay_steps = int(hparams.num_train_steps / (10 * start_factor))
-    else:
-      start_decay_step = hparams.start_decay_step
-      decay_steps = hparams.decay_steps
-      decay_factor = hparams.decay_factor
+    elif hparams.decay_scheme == "luong234":
+      start_decay_step = int(hparams.num_train_steps * 2 / 3)
+      remain_steps = hparams.num_train_steps - start_decay_step
+      decay_steps = int(remain_steps / 4)  # decay 4 times
+      decay_factor = 0.5
+    elif not hparams.decay_scheme:  # no decay
+      start_decay_step = hparams.num_train_steps
+      decay_steps = 0
+      decay_factor = 1.0
+    elif hparams.decay_scheme:
+      raise ValueError("Unknown decay scheme %s" % hparams.decay_scheme)
     utils.print_out("  decay_scheme=%s, start_decay_step=%d, decay_steps %d, "
-                    "decay_factor %g" % (hparams.learning_rate_decay_scheme,
-                                         hparams.start_decay_step,
-                                         hparams.decay_steps,
-                                         hparams.decay_factor))
+                    "decay_factor %g" % (hparams.decay_scheme,
+                                         start_decay_step,
+                                         decay_steps,
+                                         decay_factor))
 
     return tf.cond(
         self.global_step < start_decay_step,
@@ -230,6 +231,10 @@ class BaseModel(object):
             src_embed_size=hparams.num_units,
             tgt_embed_size=hparams.num_units,
             num_partitions=hparams.num_embeddings_partitions,
+            src_vocab_file=hparams.src_vocab_file,
+            tgt_vocab_file=hparams.tgt_vocab_file,
+            src_embed_file=hparams.src_embed_file,
+            tgt_embed_file=hparams.tgt_embed_file,
             scope=scope,))
 
   def train(self, sess):
@@ -512,9 +517,13 @@ class BaseModel(object):
     """
     _, infer_summary, _, sample_words = self.infer(sess)
 
-    # make sure outputs is of shape [batch_size, time]
+    # make sure outputs is of shape [batch_size, time] or [beam_width,
+    # batch_size, time] when using beam search.
     if self.time_major:
       sample_words = sample_words.transpose()
+    elif sample_words.ndim == 3:  # beam search output in [batch_size,
+                                  # time, beam_width] shape.
+      sample_words = sample_words.transpose([2, 0, 1])
     return sample_words, infer_summary
 
 

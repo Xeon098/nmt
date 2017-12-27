@@ -102,19 +102,13 @@ def add_arguments(parser):
         t2t: Tensor2Tensor's way, start with lr 100 times smaller, then
              exponentiate until the specified lr.\
       """)
-  parser.add_argument("--start_decay_step", type=int, default=0,
-                      help="When we start to decay")
-  parser.add_argument("--decay_steps", type=int, default=10000,
-                      help="How frequent we decay")
-  parser.add_argument("--decay_factor", type=float, default=1.0,
-                      help="How much we decay.")
   parser.add_argument(
-      "--learning_rate_decay_scheme", type=str, default="", help="""\
-      If specified, overwrite start_decay_step, decay_steps, decay_factor.
-      Options include:
-        luong: after 1/2 num train steps, we start halving the learning rate
-        for 5 times before finishing.
-        luong10: same as luong but halve the learning rate 10 times instead.\
+      "--decay_scheme", type=str, default="", help="""\
+      How we decay learning rate. Options include:
+        luong234: after 2/3 num train steps, we start halving the learning rate
+          for 4 times before finishing.
+        luong10: after 1/2 num train steps, we start halving the learning rate
+          for 10 times before finishing.\
       """)
 
   parser.add_argument(
@@ -148,8 +142,11 @@ def add_arguments(parser):
 
   # Vocab
   parser.add_argument("--vocab_prefix", type=str, default=None, help="""\
-      Vocab prefix, expect files with src/tgt suffixes.If None, extract from
-      train files.\
+      Vocab prefix, expect files with src/tgt suffixes.\
+      """)
+  parser.add_argument("--embed_prefix", type=str, default=None, help="""\
+      Pretrained embedding prefix, expect files with src/tgt suffixes.
+      The embedding files should be Glove formated txt files.\
       """)
   parser.add_argument("--sos", type=str, default="<s>",
                       help="Start-of-sentence symbol.")
@@ -189,8 +186,6 @@ def add_arguments(parser):
                       help="Dropout rate (not keep_prob)")
   parser.add_argument("--max_gradient_norm", type=float, default=5.0,
                       help="Clip gradients to this norm.")
-  parser.add_argument("--source_reverse", type="bool", nargs="?", const=True,
-                      default=False, help="Reverse source sequence.")
   parser.add_argument("--batch_size", type=int, default=128, help="Batch size.")
 
   parser.add_argument("--steps_per_stats", type=int, default=100,
@@ -266,6 +261,10 @@ def add_arguments(parser):
                       help="Task id of the worker.")
   parser.add_argument("--num_workers", type=int, default=1,
                       help="Number of workers (inference only).")
+  parser.add_argument("--num_inter_threads", type=int, default=0,
+                      help="number of inter_op_parallelism_threads")
+  parser.add_argument("--num_intra_threads", type=int, default=0,
+                      help="number of intra_op_parallelism_threads")
 
 
 def create_hparams(flags):
@@ -278,6 +277,7 @@ def create_hparams(flags):
       dev_prefix=flags.dev_prefix,
       test_prefix=flags.test_prefix,
       vocab_prefix=flags.vocab_prefix,
+      embed_prefix=flags.embed_prefix,
       out_dir=flags.out_dir,
 
       # Networks
@@ -306,10 +306,7 @@ def create_hparams(flags):
       learning_rate=flags.learning_rate,
       warmup_steps=flags.warmup_steps,
       warmup_scheme=flags.warmup_scheme,
-      start_decay_step=flags.start_decay_step,
-      decay_factor=flags.decay_factor,
-      decay_steps=flags.decay_steps,
-      learning_rate_decay_scheme=flags.learning_rate_decay_scheme,
+      decay_scheme=flags.decay_scheme,
       colocate_gradients_with_ops=flags.colocate_gradients_with_ops,
 
       # Data constraints
@@ -317,7 +314,6 @@ def create_hparams(flags):
       max_train=flags.max_train,
       src_max_len=flags.src_max_len,
       tgt_max_len=flags.tgt_max_len,
-      source_reverse=flags.source_reverse,
 
       # Inference
       src_max_len_infer=flags.src_max_len_infer,
@@ -344,6 +340,9 @@ def create_hparams(flags):
       log_device_placement=flags.log_device_placement,
       random_seed=flags.random_seed,
       override_loaded_hparams=flags.override_loaded_hparams,
+      num_keep_ckpts=5,  # saves 5 checkpoints by default.
+      num_intra_threads=FLAGS.num_intra_threads,
+      num_inter_threads=FLAGS.num_inter_threads,
   )
 
 
@@ -417,6 +416,19 @@ def extend_hparams(hparams):
   hparams.add_hparam("tgt_vocab_size", tgt_vocab_size)
   hparams.add_hparam("src_vocab_file", src_vocab_file)
   hparams.add_hparam("tgt_vocab_file", tgt_vocab_file)
+
+  # Pretrained Embeddings:
+  hparams.add_hparam("src_embed_file", "")
+  hparams.add_hparam("tgt_embed_file", "")
+  if hparams.embed_prefix:
+    src_embed_file = hparams.embed_prefix + "." + hparams.src
+    tgt_embed_file = hparams.embed_prefix + "." + hparams.tgt
+
+    if tf.gfile.Exists(src_embed_file):
+      hparams.src_embed_file = src_embed_file
+
+    if tf.gfile.Exists(tgt_embed_file):
+      hparams.tgt_embed_file = tgt_embed_file
 
   # Check out_dir
   if not tf.gfile.Exists(hparams.out_dir):
