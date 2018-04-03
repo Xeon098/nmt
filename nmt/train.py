@@ -467,7 +467,7 @@ def _external_eval(model, global_step, sess, hparams, iterator,
 
   sess.run(iterator.initializer, feed_dict=iterator_feed_dict)
 
-  output = os.path.join(out_dir, "output_%s" % label)
+  output = os.path.join(out_dir, "output_%s_%s" % (label, global_step))
   scores = nmt_utils.decode_and_evaluate(
       label,
       model,
