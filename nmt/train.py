@@ -196,7 +196,7 @@ def check_stats(stats, global_step, steps_per_stats, hparams, log_f):
     utils.print_out("  step %d overflow, stop early" % global_step, log_f)
     is_overflow = True
 
-  return is_overflow
+  return is_overflow, train_ppl
 
 
 def train(hparams, scope=None, target_session=""):
@@ -317,7 +317,7 @@ def train(hparams, scope=None, target_session=""):
     # Once in a while, we print statistics.
     if global_step - last_stats_step >= steps_per_stats:
       last_stats_step = global_step
-      is_overflow = check_stats(stats, global_step, steps_per_stats, hparams,
+      is_overflow, train_ppl = check_stats(stats, global_step, steps_per_stats, hparams,
                                 log_f)
       if is_overflow:
         break
