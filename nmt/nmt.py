@@ -34,6 +34,7 @@ from .utils import vocab_utils
 utils.check_tensorflow_version()
 
 FLAGS = None
+summary_callback = None
 
 
 def add_arguments(parser):
@@ -541,7 +542,7 @@ def run_main(flags, default_hparams, train_fn, inference_fn, target_session=""):
         utils.print_out("  %s: %.1f" % (metric, score))
   else:
     # Train
-    train_fn(hparams, target_session=target_session)
+    train_fn(hparams, target_session=target_session, summary_callback=summary_callback)
 
 
 def main(unused_argv):
