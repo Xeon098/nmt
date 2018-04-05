@@ -45,10 +45,15 @@ def add_arguments(parser):
   parser.add_argument("--num_units", type=int, default=32, help="Network size.")
   parser.add_argument("--num_layers", type=int, default=2,
                       help="Network depth.")
+  parser.add_argument("--num_encoder_layers", type=int, default=None,
+                      help="Encoder depth, equal to num_layers if None.")
+  parser.add_argument("--num_decoder_layers", type=int, default=None,
+                      help="Decoder depth, equal to num_layers if None.")
   parser.add_argument("--encoder_type", type=str, default="uni", help="""\
-      uni | bi | gnmt. For bi, we build num_layers/2 bi-directional layers.For
-      gnmt, we build 1 bi-directional layer, and (num_layers - 1) uni-
-      directional layers.\
+      uni | bi | gnmt.
+      For bi, we build num_encoder_layers/2 bi-directional layers.
+      For gnmt, we build 1 bi-directional layer, and (num_encoder_layers - 1)
+        uni-directional layers.\
       """)
   parser.add_argument("--residual", type="bool", nargs="?", const=True,
                       default=False,
@@ -108,6 +113,8 @@ def add_arguments(parser):
       How we decay learning rate. Options include:
         luong234: after 2/3 num train steps, we start halving the learning rate
           for 4 times before finishing.
+        luong5: after 1/2 num train steps, we start halving the learning rate
+          for 5 times before finishing.\
         luong10: after 1/2 num train steps, we start halving the learning rate
           for 10 times before finishing.\
       """)
@@ -227,6 +234,13 @@ def add_arguments(parser):
   parser.add_argument("--override_loaded_hparams", type="bool", nargs="?",
                       const=True, default=False,
                       help="Override loaded hparams with values specified")
+  parser.add_argument("--num_keep_ckpts", type=int, default=5,
+                      help="Max number of checkpoints to keep.")
+  parser.add_argument("--avg_ckpts", type="bool", nargs="?",
+                      const=True, default=False, help=("""\
+                      Average the last N checkpoints for external evaluation.
+                      N can be controlled by setting --num_keep_ckpts.\
+                      """))
 
   # Inference
   parser.add_argument("--ckpt", type=str, default="",
@@ -251,6 +265,12 @@ def add_arguments(parser):
       """))
   parser.add_argument("--length_penalty_weight", type=float, default=0.0,
                       help="Length penalty for beam search.")
+  parser.add_argument("--sampling_temperature", type=float,
+                      default=0.0,
+                      help=("""\
+      Softmax sampling temperature for inference decoding, 0.0 means greedy
+      decoding. This option is ignored when using beam search.\
+      """))
   parser.add_argument("--num_translations_per_input", type=int, default=1,
                       help=("""\
       Number of translations generated for each sentence. This is only used for
@@ -283,7 +303,9 @@ def create_hparams(flags):
 
       # Networks
       num_units=flags.num_units,
-      num_layers=flags.num_layers,
+      num_layers=flags.num_layers,  # Compatible
+      num_encoder_layers=(flags.num_encoder_layers or flags.num_layers),
+      num_decoder_layers=(flags.num_decoder_layers or flags.num_layers),
       dropout=flags.dropout,
       unit_type=flags.unit_type,
       encoder_type=flags.encoder_type,
@@ -322,6 +344,7 @@ def create_hparams(flags):
       infer_batch_size=flags.infer_batch_size,
       beam_width=flags.beam_width,
       length_penalty_weight=flags.length_penalty_weight,
+      sampling_temperature=flags.sampling_temperature,
       num_translations_per_input=flags.num_translations_per_input,
 
       # Vocab
@@ -341,7 +364,8 @@ def create_hparams(flags):
       log_device_placement=flags.log_device_placement,
       random_seed=flags.random_seed,
       override_loaded_hparams=flags.override_loaded_hparams,
-      num_keep_ckpts=5,  # saves 5 checkpoints by default.
+      num_keep_ckpts=flags.num_keep_ckpts,
+      avg_ckpts=flags.avg_ckpts,
       num_intra_threads=flags.num_intra_threads,
       num_inter_threads=flags.num_inter_threads,
   )
@@ -349,14 +373,44 @@ def create_hparams(flags):
 
 def extend_hparams(hparams):
   """Extend training hparams."""
+  assert hparams.num_encoder_layers and hparams.num_decoder_layers
+  if hparams.num_encoder_layers != hparams.num_decoder_layers:
+    hparams.pass_hidden_state = False
+    utils.print_out("Num encoder layer %d is different from num decoder layer"
+                    " %d, so set pass_hidden_state to False" % (
+                        hparams.num_encoder_layers,
+                        hparams.num_decoder_layers))
+
   # Sanity checks
-  if hparams.encoder_type == "bi" and hparams.num_layers % 2 != 0:
-    raise ValueError("For bi, num_layers %d should be even" %
-                     hparams.num_layers)
+  if hparams.encoder_type == "bi" and hparams.num_encoder_layers % 2 != 0:
+    raise ValueError("For bi, num_encoder_layers %d should be even" %
+                     hparams.num_encoder_layers)
   if (hparams.attention_architecture in ["gnmt"] and
-      hparams.num_layers < 2):
+      hparams.num_encoder_layers < 2):
     raise ValueError("For gnmt attention architecture, "
-                     "num_layers %d should be >= 2" % hparams.num_layers)
+                     "num_encoder_layers %d should be >= 2" %
+                     hparams.num_encoder_layers)
+
+  # Set residual layers
+  num_encoder_residual_layers = 0
+  num_decoder_residual_layers = 0
+  if hparams.residual:
+    if hparams.num_encoder_layers > 1:
+      num_encoder_residual_layers = hparams.num_encoder_layers - 1
+    if hparams.num_decoder_layers > 1:
+      num_decoder_residual_layers = hparams.num_decoder_layers - 1
+
+    if hparams.encoder_type == "gnmt":
+      # The first unidirectional layer (after the bi-directional layer) in
+      # the GNMT encoder can't have residual connection due to the input is
+      # the concatenation of fw_cell and bw_cell's outputs.
+      num_encoder_residual_layers = hparams.num_encoder_layers - 2
+
+      # Compatible for GNMT models
+      if hparams.num_encoder_layers == hparams.num_decoder_layers:
+        num_decoder_residual_layers = num_encoder_residual_layers
+  hparams.add_hparam("num_encoder_residual_layers", num_encoder_residual_layers)
+  hparams.add_hparam("num_decoder_residual_layers", num_decoder_residual_layers)
 
   if hparams.subword_option and hparams.subword_option not in ["spm", "bpe"]:
     raise ValueError("subword option must be either spm, or bpe")
@@ -369,19 +423,6 @@ def extend_hparams(hparams):
   utils.print_out("  dev_prefix=%s" % hparams.dev_prefix)
   utils.print_out("  test_prefix=%s" % hparams.test_prefix)
   utils.print_out("  out_dir=%s" % hparams.out_dir)
-
-  # Set num_residual_layers
-  if hparams.residual and hparams.num_layers > 1:
-    if hparams.encoder_type == "gnmt":
-      # The first unidirectional layer (after the bi-directional layer) in
-      # the GNMT encoder can't have residual connection due to the input is
-      # the concatenation of fw_cell and bw_cell's outputs.
-      num_residual_layers = hparams.num_layers - 2
-    else:
-      num_residual_layers = hparams.num_layers - 1
-  else:
-    num_residual_layers = 0
-  hparams.add_hparam("num_residual_layers", num_residual_layers)
 
   ## Vocab
   # Get vocab file names first
@@ -442,6 +483,12 @@ def extend_hparams(hparams):
     best_metric_dir = os.path.join(hparams.out_dir, "best_" + metric)
     hparams.add_hparam("best_" + metric + "_dir", best_metric_dir)
     tf.gfile.MakeDirs(best_metric_dir)
+
+    if hparams.avg_ckpts:
+      hparams.add_hparam("avg_best_" + metric, 0)  # larger is better
+      best_metric_dir = os.path.join(hparams.out_dir, "avg_best_" + metric)
+      hparams.add_hparam("avg_best_" + metric + "_dir", best_metric_dir)
+      tf.gfile.MakeDirs(best_metric_dir)
 
   return hparams
 
@@ -513,7 +560,7 @@ def run_main(flags, default_hparams, train_fn, inference_fn, target_session=""):
 
   # Load hparams.
   hparams = create_or_load_hparams(
-      out_dir, default_hparams, flags.hparams_path, save_hparams=(jobid==0))
+      out_dir, default_hparams, flags.hparams_path, save_hparams=(jobid == 0))
 
   if flags.inference_input_file:
     # Inference indices
