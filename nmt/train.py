@@ -140,7 +140,7 @@ def run_external_eval(infer_model, infer_sess, model_dir, hparams,
 
 
 def run_avg_external_eval(infer_model, infer_sess, model_dir, hparams,
-                          summary_writer, global_step):
+                          summary_writer, global_step, summary_callback=None):
   """Creates an averaged checkpoint and run external eval with it."""
   avg_dev_scores, avg_test_scores = None, None
   if hparams.avg_ckpts:
@@ -156,7 +156,8 @@ def run_avg_external_eval(infer_model, infer_sess, model_dir, hparams,
           avg_model_dir,
           hparams,
           summary_writer,
-          avg_ckpts=True)
+          avg_ckpts=True,
+          summary_callback=summary_callback)
 
   return avg_dev_scores, avg_test_scores
 
@@ -183,7 +184,7 @@ def run_full_eval(model_dir, infer_model, infer_sess, eval_model, eval_sess,
   if avg_ckpts:
     avg_dev_scores, avg_test_scores = run_avg_external_eval(
         infer_model, infer_sess, model_dir, hparams, summary_writer,
-        global_step)
+        global_step, summary_callback=summary_callback)
     metrics["avg_dev_scores"] = avg_dev_scores
     metrics["avg_test_scores"] = avg_test_scores
 
@@ -369,7 +370,7 @@ def train(hparams, scope=None, target_session="", summary_callback=None):
 
       if avg_ckpts:
         run_avg_external_eval(infer_model, infer_sess, model_dir, hparams,
-                              summary_writer, global_step)
+                              summary_writer, global_step, summary_callback=summary_callback)
 
       train_sess.run(
           train_model.iterator.initializer,
@@ -430,7 +431,7 @@ def train(hparams, scope=None, target_session="", summary_callback=None):
 
       if avg_ckpts:
         run_avg_external_eval(infer_model, infer_sess, model_dir, hparams,
-                              summary_writer, global_step)
+                              summary_writer, global_step, summary_callback=summary_callback)
 
   # Done training
   loaded_train_model.saver.save(
@@ -454,7 +455,7 @@ def train(hparams, scope=None, target_session="", summary_callback=None):
         os.path.join(best_model_dir, summary_name), infer_model.graph)
     result_summary, best_global_step, _ = run_full_eval(
         best_model_dir, infer_model, infer_sess, eval_model, eval_sess, hparams,
-        summary_writer, sample_src_data, sample_tgt_data)
+        summary_writer, sample_src_data, sample_tgt_data, summary_callback=summary_callback)
     print_step_info("# Best %s, " % metric, best_global_step, info,
                     result_summary, log_f)
     summary_writer.close()
@@ -465,7 +466,7 @@ def train(hparams, scope=None, target_session="", summary_callback=None):
           os.path.join(best_model_dir, summary_name), infer_model.graph)
       result_summary, best_global_step, _ = run_full_eval(
           best_model_dir, infer_model, infer_sess, eval_model, eval_sess,
-          hparams, summary_writer, sample_src_data, sample_tgt_data)
+          hparams, summary_writer, sample_src_data, sample_tgt_data, summary_callback=summary_callback)
       print_step_info("# Averaged Best %s, " % metric, best_global_step, info,
                       result_summary, log_f)
       summary_writer.close()
