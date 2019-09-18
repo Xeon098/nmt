@@ -325,7 +325,8 @@ def run_full_eval(model_dir,
                   summary_writer,
                   sample_src_data,
                   sample_tgt_data,
-                  avg_ckpts=False):
+                  avg_ckpts=False,
+                  summary_callback=None):
   """Wrapper for running sample_decode, internal_eval and external_eval.
 
   Args:
@@ -347,7 +348,7 @@ def run_full_eval(model_dir,
                     sample_src_data, sample_tgt_data)
   return run_internal_and_external_eval(model_dir, infer_model, infer_sess,
                                         eval_model, eval_sess, hparams,
-                                        summary_writer, avg_ckpts)
+                                        summary_writer, avg_ckpts, summary_callback=summary_callback)
 
 
 def init_stats():
